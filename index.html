@@ -257,6 +257,120 @@ let MATS=[
 ];
 
 // ════════════════════════════════════════════
+// GOOGLE SHEETS — URL do Apps Script
+// Após publicar o Apps Script, cole a URL aqui:
+// ════════════════════════════════════════════
+let GS_URL = 'https://script.google.com/macros/s/AKfycbxe6w4MfFMfqHiFQQfJOxEKaSDOKjD8RlwTPPopY6LwErErQRws5UssgrG39tKkw9_6Uw/exec';
+
+// ── Salvar localmente (funciona em qualquer navegador)
+function localSave(aula) {
+  try {
+    const key = 'chamada_' + aula.id;
+    localStorage.setItem(key, JSON.stringify({rec: aula.rec, lbl: aula.lbl, date: aula.date}));
+    // Salvar índice de aulas salvas
+    const saved = JSON.parse(localStorage.getItem('chamadas_salvas') || '[]');
+    if (!saved.includes(aula.id)) saved.push(aula.id);
+    localStorage.setItem('chamadas_salvas', JSON.stringify(saved));
+    return true;
+  } catch(e) { return false; }
+}
+
+function localLoad() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('chamadas_salvas') || '[]');
+    let count = 0;
+    ATTEND.forEach(a => {
+      const key = 'chamada_' + a.id;
+      const data = localStorage.getItem(key);
+      if (data) { a.rec = JSON.parse(data).rec; count++; }
+    });
+    return count;
+  } catch(e) { return 0; }
+}
+
+// ── Google Sheets (tenta primeiro, cai no local se falhar)
+async function gsSave(aula) {
+  // Sempre salva localmente primeiro
+  localSave(aula);
+  showToast('💾 Salvo localmente. Enviando para Sheets...');
+
+  if (!GS_URL) return;
+  const payload = {
+    action: 'save', aulaId: aula.id, aulaLbl: aula.lbl,
+    aulaDate: aula.date, records: aula.rec,
+    alunos: STUDS.map(s => ({id:s.id, name:s.name, mat:s.mat}))
+  };
+  try {
+    const res = await fetch(GS_URL, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    const txt = await res.text();
+    try {
+      const json = JSON.parse(txt);
+      if (json.ok) showToast('✅ Salvo também no Google Sheets!');
+      else showToast('⚠ Sheets: ' + (json.error || 'erro desconhecido'));
+    } catch(e) {
+      // Apps Script às vezes retorna redirect — tentar de novo sem headers
+      showToast('🔄 Reenviar para Sheets...');
+      try {
+        await fetch(GS_URL, {method:'POST', mode:'no-cors', body: JSON.stringify(payload)});
+        showToast('✅ Enviado para Sheets (sem confirmação)!');
+      } catch(e2) { showToast('⚠ Sheets indisponível. Salvo localmente apenas.'); }
+    }
+  } catch(e) {
+    showToast('⚠ Sheets indisponível. Salvo localmente apenas.');
+  }
+}
+
+function gsLoad() {
+  // Carrega do localStorage primeiro (imediato)
+  const count = localLoad();
+  if (count > 0) {
+    showToast('✅ ' + count + ' chamada(s) carregada(s)!');
+    R();
+  }
+
+  // Tenta Google Sheets em paralelo via JSONP
+  if (!GS_URL) return;
+  const cbName = 'gsCallback_' + Date.now();
+  window[cbName] = function(json) {
+    try {
+      if (json.ok && json.data) {
+        ATTEND.forEach(a => { if (json.data[a.id]) a.rec = json.data[a.id]; });
+        showToast('☁ Sheets: ' + Object.keys(json.data).length + ' chamada(s)!');
+        R();
+      }
+    } catch(e) {}
+    delete window[cbName];
+    const el = document.getElementById(cbName);
+    if (el) el.remove();
+  };
+  const s = document.createElement('script');
+  s.id = cbName;
+  s.src = GS_URL + '?action=load&callback=' + cbName;
+  s.onerror = () => { delete window[cbName]; };
+  document.body.appendChild(s);
+}
+
+// ── Carregar automaticamente ao abrir
+window.addEventListener('load', () => { setTimeout(() => { const c=localLoad(); if(c>0){R();} }, 800); });
+
+function showToast(msg) {
+  let t = document.getElementById('toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'toast';
+    t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1B5E5E;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.2);transition:opacity .3s';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.style.opacity = '1';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.style.opacity = '0', 3000);
+}
+
+// ════════════════════════════════════════════
 // ESTADO
 // ════════════════════════════════════════════
 let CU=null,TAB='',SID=null,AULA=null;
@@ -452,7 +566,7 @@ function rChamada(){
   const lista=aula?STUDS.map(s=>{const p=aula.rec[s.id]===1;return`<div class="pi ${p?'presente':'ausente'}" data-sid="${s.id}"><div class="pio">${p?'✓':'✗'}</div><span class="f13 fw5">${esc(s.name)}</span><span class="ps">${p?'Presente':'Ausente'}</span></div>`;}).join(''):'';
   return`<div class="cg">
     <div>
-      <div class="flex fac fjsb mb12"><span class="f12 cm fw5" style="text-transform:uppercase;letter-spacing:.5px">Aulas</span><button class="btn bg bsm" id="bna">+ Nova</button></div>
+      <div class="flex fac fjsb mb12"><span class="f12 cm fw5" style="text-transform:uppercase;letter-spacing:.5px">Aulas</span><button class="btn bg bsm" id="bna">+ Nova</button><button class="btn bsm" style="background:#0d3333;color:#fff;border:none;border-radius:7px;cursor:pointer" id="btload" title="Carregar chamadas salvas">☁ Carregar</button></div>
       <div class="card mb12 hidden" id="fna" style="padding:12px">
         <input type="date" class="inp iw mb8" id="ind"/>
         <button class="btn bp bsm iw" id="bca">Criar Aula</button>
@@ -462,7 +576,7 @@ function rChamada(){
     <div class="cf">
       ${aula?`<div class="flex fac fjsb" style="padding:14px 18px;border-bottom:1px solid var(--border);background:var(--cream)">
         <div><div style="font-size:15px;font-weight:600">${esc(aula.lbl)}</div><div class="f12 cm mt4">${pc(aula)} pres. · ${STUDS.length-pc(aula)} aus.</div></div>
-        <div class="flex g8"><button class="btn bgh bsm" id="btdp">Todos P</button><button class="btn bgh bsm" id="btda">Todos A</button></div>
+        <div class="flex g8"><button class="btn bgh bsm" id="btdp">Todos P</button><button class="btn bgh bsm" id="btda">Todos A</button><button class="btn" style="background:#1B5E5E;color:#fff;font-size:12px;padding:4px 12px;border:none;border-radius:7px" id="btsave">💾 Salvar Sheets</button></div>
       </div><div style="padding:4px" id="plst">${lista}</div>`
       :'<div style="padding:40px;text-align:center;color:var(--muted)">Selecione ou crie uma aula</div>'}
     </div>
@@ -483,6 +597,8 @@ function bChamada(){
   });
   q('#btdp')&&(q('#btdp').onclick=()=>{const a=ATTEND.find(x=>x.id===AULA);if(a){STUDS.forEach(s=>a.rec[s.id]=1);R();}});
   q('#btda')&&(q('#btda').onclick=()=>{const a=ATTEND.find(x=>x.id===AULA);if(a){STUDS.forEach(s=>a.rec[s.id]=0);R();}});
+  q('#btsave')&&(q('#btsave').onclick=()=>{const a=ATTEND.find(x=>x.id===AULA);if(a)gsSave(a);});
+  q('#btload')&&(q('#btload').onclick=()=>gsLoad());
 }
 
 // ── TRABALHOS ──────────────────────────────
